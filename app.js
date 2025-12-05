@@ -1,32 +1,5 @@
-// Firebase SDK 가져오기
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
-import { 
-    getDatabase, 
-    ref, 
-    push, 
-    set, 
-    update, 
-    remove, 
-    onValue,
-    query,
-    orderByChild
-} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-database.js";
-
-// Firebase 설정
-const firebaseConfig = {
-    apiKey: "AIzaSyAXLRxWutEMTM-GXVjCoW8VZdAgDuV381M",
-    authDomain: "blue-todo-backand.firebaseapp.com",
-    projectId: "blue-todo-backand",
-    storageBucket: "blue-todo-backand.firebasestorage.app",
-    messagingSenderId: "235600465234",
-    appId: "1:235600465234:web:f651fe700c88dec45c7e8b",
-    databaseURL: "https://blue-todo-backand-default-rtdb.asia-southeast1.firebasedatabase.app/"
-};
-
-// Firebase 초기화
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const todosRef = ref(db, 'todos');
+// 백엔드 API 주소
+const API_URL = 'http://localhost:5000/todos';
 
 // DOM 요소들
 const todoInput = document.getElementById('todoInput');
@@ -46,39 +19,25 @@ const pendingCount = document.getElementById('pendingCount');
 let todos = [];
 let editingId = null;
 
-// Realtime Database에서 할일 실시간 구독
-function subscribeTodos() {
-    onValue(todosRef, (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            // 객체를 배열로 변환하고 최신순 정렬
-            todos = Object.entries(data).map(([id, value]) => ({
-                id,
-                ...value
-            })).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        } else {
-            todos = [];
+// 할일 목록 조회 (Read)
+async function fetchTodos() {
+    try {
+        const response = await fetch(API_URL);
+        if (!response.ok) {
+            throw new Error('할일 목록을 불러오는데 실패했습니다.');
         }
+        todos = await response.json();
         renderTodos();
-    }, (error) => {
+    } catch (error) {
         console.error("데이터 로드 오류:", error);
-        loadFromLocalStorage();
-    });
-}
-
-// 로컬 스토리지 폴백 (오프라인 지원)
-function loadFromLocalStorage() {
-    const saved = localStorage.getItem('todos');
-    if (saved) {
-        todos = JSON.parse(saved);
+        alert("할일 목록을 불러오는데 실패했습니다. 서버가 실행중인지 확인해주세요.");
     }
-    renderTodos();
 }
 
-// 할일 추가 (Realtime Database)
+// 할일 추가 (Create)
 async function addTodo() {
-    const text = todoInput.value.trim();
-    if (!text) {
+    const title = todoInput.value.trim();
+    if (!title) {
         todoInput.focus();
         shakeElement(todoInput.parentElement);
         return;
@@ -88,18 +47,28 @@ async function addTodo() {
     addBtn.disabled = true;
 
     try {
-        const newTodoRef = push(todosRef);
-        await set(newTodoRef, {
-            text: text,
-            completed: false,
-            createdAt: new Date().toISOString()
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ title })
         });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || '할일 추가에 실패했습니다.');
+        }
+
+        const newTodo = await response.json();
+        todos.unshift(newTodo);
+        renderTodos();
         
         todoInput.value = '';
         todoInput.focus();
     } catch (error) {
         console.error("할일 추가 오류:", error);
-        alert("할일 추가에 실패했습니다. 다시 시도해주세요.");
+        alert(error.message || "할일 추가에 실패했습니다. 다시 시도해주세요.");
     } finally {
         addBtn.disabled = false;
     }
@@ -113,7 +82,7 @@ function shakeElement(element) {
     }, 500);
 }
 
-// 할일 삭제 (Realtime Database)
+// 할일 삭제 (Delete)
 async function deleteTodo(id) {
     const item = document.querySelector(`[data-id="${id}"]`);
     if (item) {
@@ -121,8 +90,16 @@ async function deleteTodo(id) {
         
         setTimeout(async () => {
             try {
-                const todoRef = ref(db, `todos/${id}`);
-                await remove(todoRef);
+                const response = await fetch(`${API_URL}/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error('삭제에 실패했습니다.');
+                }
+
+                todos = todos.filter(todo => todo._id !== id);
+                renderTodos();
             } catch (error) {
                 console.error("할일 삭제 오류:", error);
                 item.classList.remove('removing');
@@ -132,16 +109,30 @@ async function deleteTodo(id) {
     }
 }
 
-// 할일 완료 토글 (Realtime Database)
+// 할일 완료 토글 (Update)
 async function toggleTodo(id) {
-    const todo = todos.find(t => t.id === id);
+    const todo = todos.find(t => t._id === id);
     if (!todo) return;
 
     try {
-        const todoRef = ref(db, `todos/${id}`);
-        await update(todoRef, {
-            completed: !todo.completed
+        const response = await fetch(`${API_URL}/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                title: todo.title,
+                completed: !todo.completed 
+            })
         });
+
+        if (!response.ok) {
+            throw new Error('상태 변경에 실패했습니다.');
+        }
+
+        const updatedTodo = await response.json();
+        todos = todos.map(t => t._id === id ? updatedTodo : t);
+        renderTodos();
     } catch (error) {
         console.error("상태 변경 오류:", error);
         alert("상태 변경에 실패했습니다. 다시 시도해주세요.");
@@ -150,10 +141,10 @@ async function toggleTodo(id) {
 
 // 수정 모달 열기
 function openEditModal(id) {
-    const todo = todos.find(t => t.id === id);
+    const todo = todos.find(t => t._id === id);
     if (todo) {
         editingId = id;
-        editInput.value = todo.text;
+        editInput.value = todo.title;
         editModal.classList.add('active');
         setTimeout(() => editInput.focus(), 100);
     }
@@ -166,23 +157,35 @@ function closeEditModal() {
     editInput.value = '';
 }
 
-// 할일 수정 저장 (Realtime Database)
+// 할일 수정 저장 (Update)
 async function saveEditedTodo() {
-    const text = editInput.value.trim();
-    if (!text || !editingId) {
+    const title = editInput.value.trim();
+    if (!title || !editingId) {
         shakeElement(editInput);
         return;
     }
 
     try {
-        const todoRef = ref(db, `todos/${editingId}`);
-        await update(todoRef, {
-            text: text
+        const response = await fetch(`${API_URL}/${editingId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ title })
         });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || '수정에 실패했습니다.');
+        }
+
+        const updatedTodo = await response.json();
+        todos = todos.map(t => t._id === editingId ? updatedTodo : t);
+        renderTodos();
         closeEditModal();
     } catch (error) {
         console.error("할일 수정 오류:", error);
-        alert("수정에 실패했습니다. 다시 시도해주세요.");
+        alert(error.message || "수정에 실패했습니다. 다시 시도해주세요.");
     }
 }
 
@@ -232,7 +235,7 @@ function renderTodos() {
         todos.forEach((todo, index) => {
             const li = document.createElement('li');
             li.className = `todo-item ${todo.completed ? 'completed' : ''}`;
-            li.dataset.id = todo.id;
+            li.dataset.id = todo._id;
             li.style.animationDelay = `${index * 0.05}s`;
 
             li.innerHTML = `
@@ -240,7 +243,7 @@ function renderTodos() {
                     <input type="checkbox" class="checkbox" ${todo.completed ? 'checked' : ''}>
                     <span class="checkmark"></span>
                 </label>
-                <span class="todo-text">${escapeHtml(todo.text)}</span>
+                <span class="todo-text">${escapeHtml(todo.title)}</span>
                 <div class="todo-actions">
                     <button class="action-btn edit-btn" title="수정">✏️</button>
                     <button class="action-btn delete-btn" title="삭제">🗑️</button>
@@ -249,15 +252,15 @@ function renderTodos() {
 
             // 체크박스 이벤트
             const checkbox = li.querySelector('.checkbox');
-            checkbox.addEventListener('change', () => toggleTodo(todo.id));
+            checkbox.addEventListener('change', () => toggleTodo(todo._id));
 
             // 수정 버튼 이벤트
             const editBtn = li.querySelector('.edit-btn');
-            editBtn.addEventListener('click', () => openEditModal(todo.id));
+            editBtn.addEventListener('click', () => openEditModal(todo._id));
 
             // 삭제 버튼 이벤트
             const deleteBtn = li.querySelector('.delete-btn');
-            deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
+            deleteBtn.addEventListener('click', () => deleteTodo(todo._id));
 
             todoList.appendChild(li);
         });
@@ -319,5 +322,5 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-// 초기화 - Realtime Database 실시간 구독 시작
-subscribeTodos();
+// 초기화 - 할일 목록 불러오기
+fetchTodos();
